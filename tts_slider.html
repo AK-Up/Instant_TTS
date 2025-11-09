@@ -1,0 +1,282 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Instant TTS — Dark Neon Theme</title>
+<style>
+  body {
+    font-family: Inter, Arial, sans-serif;
+    background: #212121;
+    color: #f1f1f1;
+    padding: 30px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+  }
+
+  h1 {
+    margin: 0 0 12px 0;
+    color: #ffffff;
+  }
+
+  textarea {
+    width: 80%;
+    height: 160px;
+    padding: 12px;
+    font-size: 16px;
+    border-radius: 10px;
+    border: none;
+    resize: none;
+    outline: none;
+    background: #303030;
+    color: #f5f5f5;
+    box-shadow: inset 0 0 6px rgba(0, 0, 0, 0.5);
+  }
+
+  .controls {
+    display: flex;
+    gap: 10px;
+    margin-top: 12px;
+    flex-wrap: wrap;
+    justify-content: center;
+  }
+
+  .switch {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    background: #303030;
+    padding: 8px 12px;
+    border-radius: 8px;
+    font-size: 14px;
+    user-select: none;
+    cursor: pointer;
+    box-shadow: 0 0 8px rgba(203, 0, 245, 0.4);
+  }
+
+  button {
+    background: #CB00F5;
+    color: white;
+    border: none;
+    border-radius: 8px;
+    padding: 10px 14px;
+    cursor: pointer;
+    font-size: 14px;
+    transition: 0.2s;
+    box-shadow: 0 0 12px rgba(203, 0, 245, 0.7);
+  }
+
+  button:hover {
+    background: #b000d3;
+    box-shadow: 0 0 16px rgba(203, 0, 245, 1);
+  }
+
+  .indicator {
+    margin-top: 12px;
+    font-weight: bold;
+    color: #cb00f5;
+    visibility: hidden;
+  }
+
+  .chunk-box {
+    width: 80%;
+    margin-top: 14px;
+    padding: 10px;
+    border-radius: 8px;
+    background: #303030;
+    border: 1px solid #444;
+    min-height: 40px;
+    box-shadow: inset 0 0 6px rgba(0, 0, 0, 0.6);
+  }
+
+  .muted {
+    color: #b0b0b0;
+    font-size: 13px;
+  }
+
+  /* Sliders section visually disabled */
+  .sliders {
+    display: flex;
+    gap: 12px;
+    margin-top: 12px;
+    flex-wrap: wrap;
+    justify-content: center;
+    opacity: 0.4;
+    pointer-events: none;
+  }
+
+  .slider-group {
+    flex-direction: column;
+    width: 260px;
+    align-items: flex-start;
+    background: #303030;
+    padding: 10px;
+    border-radius: 8px;
+  }
+
+  input[type="range"] {
+    width: 100%;
+  }
+
+  @media screen and (max-width: 768px) {
+    h1 {
+      margin: auto !important;
+      text-align: center;
+    }
+  }
+</style>
+</head>
+<body>
+  <h1>Instant TTS</h1>
+
+  <textarea id="textInput" placeholder="Start typing..."></textarea>
+
+  <div class="controls">
+    <div id="modeSwitch" class="switch">Mode: Full</div>
+    <div id="autoSwitch" class="switch">Speak: Auto</div>
+    <button id="speakBtn" style="display:none;">Speak</button>
+    <button id="replayBtn">Replay Last Chunk</button>
+    <button id="clearBtn">Clear</button>
+    <button id="stopBtn">Stop</button>
+  </div>
+
+  <div class="sliders">
+    <div class="slider-group">
+      <label>🗣 Speak Threshold: <span id="speakValue">550</span> ms</label>
+      <input id="speakSlider" type="range" min="200" max="1500" step="50" value="550" />
+    </div>
+    <div class="slider-group">
+      <label>✂ Chunk Threshold: <span id="chunkValue">1300</span> ms</label>
+      <input id="chunkSlider" type="range" min="600" max="3000" step="100" value="1300" />
+    </div>
+  </div>
+
+  <div id="indicator" class="indicator">-> Speaking...</div>
+
+  <div class="chunk-box">
+    <div class="muted">Last committed chunk (replayable):</div>
+    <div id="lastChunk" style="margin-top:6px; font-size:15px; color:#ffffff; min-height:22px;"></div>
+  </div>
+
+<script>
+  const synth = window.speechSynthesis;
+  const textInput = document.getElementById('textInput');
+  const modeSwitch = document.getElementById('modeSwitch');
+  const autoSwitch = document.getElementById('autoSwitch');
+  const speakBtn = document.getElementById('speakBtn');
+  const replayBtn = document.getElementById('replayBtn');
+  const clearBtn = document.getElementById('clearBtn');
+  const stopBtn = document.getElementById('stopBtn');
+  const indicator = document.getElementById('indicator');
+  const speakSlider = document.getElementById('speakSlider');
+  const chunkSlider = document.getElementById('chunkSlider');
+  const speakValue = document.getElementById('speakValue');
+  const chunkValue = document.getElementById('chunkValue');
+  const lastChunkDiv = document.getElementById('lastChunk');
+
+  let mode = 'full';
+  let autoSpeak = true;
+
+  let lastSpokenIndex = 0;
+  let lastCommittedIndex = 0;
+  let chunks = [];
+  let lastChunk = '';
+
+  let speakTimer = null;
+  let chunkTimer = null;
+  let speakThreshold = parseInt(speakSlider.value);
+  let chunkThreshold = parseInt(chunkSlider.value);
+
+  function safeClampPointers(currentText) {
+    const L = currentText.length;
+    if (lastSpokenIndex > L) lastSpokenIndex = L;
+    if (lastCommittedIndex > L) lastCommittedIndex = L;
+  }
+
+  function speakText(text) {
+    if (!text || text.trim().length < 1) return;
+    if (synth.speaking) synth.cancel();
+    const utter = new SpeechSynthesisUtterance(text);
+    utter.onstart = () => indicator.style.visibility = 'visible';
+    utter.onend = () => indicator.style.visibility = 'hidden';
+    synth.speak(utter);
+  }
+
+  function handleTyping() {
+    clearTimeout(speakTimer);
+    clearTimeout(chunkTimer);
+
+    const currentText = textInput.value;
+    safeClampPointers(currentText);
+
+    speakTimer = setTimeout(() => {
+      const nowText = textInput.value;
+      safeClampPointers(nowText);
+      let toSpeakNow = (mode === 'incremental') ? nowText.slice(lastSpokenIndex) : nowText;
+      toSpeakNow = toSpeakNow.trim();
+      if (autoSpeak && toSpeakNow.length > 2) {
+        speakText(toSpeakNow);
+        lastSpokenIndex = nowText.length;
+      }
+    }, speakThreshold);
+
+    chunkTimer = setTimeout(() => {
+      const nowText = textInput.value;
+      safeClampPointers(nowText);
+      let newChunk = nowText.slice(lastCommittedIndex).trim();
+      const match = newChunk.match(/([\s\S]*[.?!])\s*$/);
+      if (match) newChunk = match[1].trim();
+      if (newChunk && newChunk.length > 2) {
+        chunks.push(newChunk);
+        lastChunk = newChunk;
+        lastChunkDiv.textContent = lastChunk;
+        lastCommittedIndex = Math.min(nowText.length, lastCommittedIndex + newChunk.length);
+      }
+    }, chunkThreshold);
+  }
+
+  textInput.addEventListener('input', handleTyping);
+
+  modeSwitch.addEventListener('click', () => {
+    mode = (mode === 'full') ? 'incremental' : 'full';
+    modeSwitch.textContent = `Mode: ${mode === 'full' ? 'Full' : 'Incremental'}`;
+  });
+
+  autoSwitch.addEventListener('click', () => {
+    autoSpeak = !autoSpeak;
+    autoSwitch.textContent = `Speak: ${autoSpeak ? 'Auto' : 'Manual'}`;
+    speakBtn.style.display = autoSpeak ? 'none' : 'inline-block';
+  });
+
+  speakBtn.addEventListener('click', () => {
+    const t = textInput.value.trim();
+    if (t.length) {
+      speakText(t);
+      lastSpokenIndex = textInput.value.length;
+    }
+  });
+
+  replayBtn.addEventListener('click', () => {
+    if (lastChunk && lastChunk.length > 0) speakText(lastChunk);
+    else alert('No committed chunk yet to replay.');
+  });
+
+  clearBtn.addEventListener('click', () => {
+    textInput.value = '';
+    lastSpokenIndex = 0;
+    lastCommittedIndex = 0;
+    chunks = [];
+    lastChunk = '';
+    lastChunkDiv.textContent = '';
+    synth.cancel();
+    indicator.style.visibility = 'hidden';
+  });
+
+  stopBtn.addEventListener('click', () => {
+    synth.cancel();
+    indicator.style.visibility = 'hidden';
+  });
+</script>
+</body>
+</html>
